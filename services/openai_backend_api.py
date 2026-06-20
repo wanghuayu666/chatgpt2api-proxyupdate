@@ -201,6 +201,15 @@ class OpenAIBackendAPI:
         if self.access_token:
             self.session.headers["Authorization"] = f"Bearer {self.access_token}"
 
+    def close(self) -> None:
+        self.session.close()
+
+    def __enter__(self) -> "OpenAIBackendAPI":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
     def _build_fp(self) -> Dict[str, str]:
         account = self.account
         raw_fp = account.get("fp")

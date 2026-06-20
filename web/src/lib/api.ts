@@ -103,6 +103,7 @@ type AccountUpdateResponse = {
 
 export type ProxyRuntimeEgressMode = "direct" | "single_proxy";
 export type ProxyRuntimeClearanceMode = "none" | "manual" | "flaresolverr";
+export type GlobalProxySource = "custom" | "register_pool";
 
 export type ProxyRuntimeClearanceSettings = {
   enabled: boolean;
@@ -154,6 +155,7 @@ export type ThirdPartyAppsSettings = {
 
 export type SettingsConfig = {
   proxy: string;
+  global_proxy_source?: GlobalProxySource;
   base_url?: string;
   global_system_prompt?: string;
   sensitive_words?: string[];

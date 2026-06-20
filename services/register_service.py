@@ -111,6 +111,7 @@ class RegisterService:
         self._store_file = store_file
         self._lock = threading.RLock()
         self._runner: threading.Thread | None = None
+        self._watchdog: threading.Thread | None = None
         self._logs: list[dict] = []
         openai_register.register_log_sink = self._append_log
         self._config = self._load()
@@ -239,6 +240,7 @@ class RegisterService:
         with self._lock:
             if self._runner and self._runner.is_alive():
                 self._config["enabled"] = True
+                self._spawn_watchdog_locked()
                 self._save()
                 return self.get()
             self._config["enabled"] = True
@@ -260,6 +262,7 @@ class RegisterService:
                 openai_register.stats.update({"done": 0, "success": 0, "fail": 0, "start_time": time.time(), "current_proxy": "", **proxy_metrics})
             self._save()
             self._spawn_runner_locked()
+            self._spawn_watchdog_locked()
             self._append_log(f"注册任务启动，模式={self._config['mode']}，线程数={self._config['threads']}", "yellow")
             return self.get()
 
@@ -327,6 +330,12 @@ class RegisterService:
         self._runner = threading.Thread(target=self._run, daemon=True, name="openai-register")
         self._runner.start()
 
+    def _spawn_watchdog_locked(self) -> None:
+        if self._watchdog and self._watchdog.is_alive():
+            return
+        self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True, name="openai-register-watchdog")
+        self._watchdog.start()
+
     def _ensure_runner_alive_locked(self) -> None:
         if not self._config.get("enabled"):
             return
@@ -334,6 +343,20 @@ class RegisterService:
             return
         self._append_log("检测到注册守护线程已停止，自动重启", "red")
         self._spawn_runner_locked()
+
+    def _watchdog_tick(self) -> int:
+        with self._lock:
+            if not self._config.get("enabled"):
+                return 0
+            self._ensure_runner_alive_locked()
+            return max(1, int(self._config.get("check_interval") or 5))
+
+    def _watchdog_loop(self) -> None:
+        while True:
+            interval = self._watchdog_tick()
+            if interval <= 0:
+                return
+            time.sleep(interval)
 
     def _target_reached(self, cfg: dict, submitted: int) -> bool:
         mode = str(cfg.get("mode") or "total")

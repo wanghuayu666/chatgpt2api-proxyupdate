@@ -146,6 +146,32 @@ class AccountCapabilityTests(unittest.TestCase):
             else:
                 config.data["auto_remove_invalid_accounts"] = original_value
 
+    def test_fetch_remote_info_closes_backend_session(self) -> None:
+        class FakeBackend:
+            instances = []
+
+            def __init__(self, access_token: str = "") -> None:
+                self.access_token = access_token
+                self.closed = False
+                FakeBackend.instances.append(self)
+
+            def get_user_info(self) -> dict:
+                return {"access_token": self.access_token, "status": "正常", "quota": 1}
+
+            def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items([{"access_token": "token-1", "status": "正常"}])
+
+            with patch("services.openai_backend_api.OpenAIBackendAPI", FakeBackend):
+                account = service.fetch_remote_info("token-1")
+
+            self.assertIsNotNone(account)
+            self.assertTrue(FakeBackend.instances)
+            self.assertTrue(all(instance.closed for instance in FakeBackend.instances))
+
 
 class TokenLogTests(unittest.TestCase):
     def test_anonymize_token_hides_raw_value(self) -> None:

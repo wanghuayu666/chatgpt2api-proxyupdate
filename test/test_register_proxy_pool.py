@@ -135,6 +135,24 @@ class RegisterProxyPoolTests(unittest.TestCase):
         known_proxy_outcome = pool.record_result("127.0.0.1:8080", success=False, error="Cloudflare cf-ray=abc")
         self.assertEqual(known_proxy_outcome["cooldown_seconds"], 30 * 60)
 
+    def test_strict_selection_returns_empty_when_all_pool_proxies_are_unavailable(self) -> None:
+        pool = self.make_pool()
+        pool.configure(
+            mode="text",
+            single_proxy="",
+            proxy_url="",
+            proxy_list_text="127.0.0.1:8080",
+            refresh_interval=120,
+        )
+        pool.record_result("127.0.0.1:8080", success=False, error="Failed to connect")
+
+        strict = pool.next_proxy(allow_blocked_fallback=False)
+        fallback = pool.next_proxy()
+
+        self.assertEqual(strict.proxy, "")
+        self.assertEqual(strict.selection_reason, "no_available_proxy")
+        self.assertEqual(fallback.proxy, "http://127.0.0.1:8080")
+
     def test_hard_proxy_failures_and_otp_timeout_are_bucketed_correctly(self) -> None:
         self.assertEqual(classify_proxy_failure("Failed to perform, curl: (56) Proxy CONNECT aborted"), "proxy_closed")
         self.assertEqual(classify_proxy_failure("Recv failure: Connection reset by peer"), "proxy_closed")
@@ -191,4 +209,3 @@ class RegisterProxyPoolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

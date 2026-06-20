@@ -83,6 +83,8 @@ DEFAULT_THIRD_PARTY_APPS = {
     },
 }
 
+GLOBAL_PROXY_SOURCES = {"custom", "register_pool"}
+
 
 def _normalize_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, str):
@@ -286,6 +288,11 @@ def _normalize_third_party_apps_settings(value: object) -> dict[str, object]:
             "url": str(canvas_source.get("url") or DEFAULT_THIRD_PARTY_APPS["infinite_canvas"]["url"]).strip(),
         },
     }
+
+
+def _normalize_global_proxy_source(value: object) -> str:
+    source = str(value or "custom").strip().lower()
+    return source if source in GLOBAL_PROXY_SOURCES else "custom"
 
 
 def _validate_image_storage_settings(settings: dict[str, object]) -> None:
@@ -559,12 +566,16 @@ class ConfigStore:
         data["image_storage"] = self.get_image_storage_settings()
         data["chat_completion_cache"] = self.get_chat_completion_cache_settings()
         data["proxy_runtime"] = self.get_public_proxy_runtime_settings()
+        data["global_proxy_source"] = self.get_global_proxy_source()
         data["third_party_apps"] = self.get_third_party_apps_settings()
         data.pop("auth-key", None)
         return data
 
     def get_proxy_settings(self) -> str:
         return str(self.data.get("proxy") or "").strip()
+
+    def get_global_proxy_source(self) -> str:
+        return _normalize_global_proxy_source(self.data.get("global_proxy_source"))
 
     def get_proxy_runtime_settings(self) -> dict[str, object]:
         return _normalize_proxy_runtime_settings(self.data.get("proxy_runtime"))
@@ -607,6 +618,7 @@ class ConfigStore:
                     incoming_runtime["_existing_cf_cookies"] = previous_clearance.get("cf_cookies")
                     incoming_runtime["_existing_cf_clearance"] = previous_clearance.get("cf_clearance")
             next_data["proxy_runtime"] = _normalize_proxy_runtime_settings(incoming_runtime)
+        next_data["global_proxy_source"] = _normalize_global_proxy_source(next_data.get("global_proxy_source"))
         next_data.pop("backup_state", None)
         self.data = next_data
         self._save()

@@ -679,34 +679,39 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
     attempted_tokens: set[str] = set()
     token = getattr(backend, "access_token", "")
     emitted = False
-    while True:
-        if token and token in attempted_tokens:
-            raise RuntimeError("no available text account")
-        if token:
-            attempted_tokens.add(token)
-        try:
+    try:
+        while True:
+            if token and token in attempted_tokens:
+                raise RuntimeError("no available text account")
+            if token:
+                attempted_tokens.add(token)
             active_backend = OpenAIBackendAPI(access_token=token)
-            for event in conversation_events(active_backend, messages=request.messages, model=request.model, prompt=request.prompt):
-                if event.get("type") != "conversation.delta":
-                    continue
-                delta = str(event.get("delta") or "")
-                if delta:
-                    emitted = True
-                    yield delta
-            account_service.mark_text_used(token)
-            return
-        except Exception as exc:
-            error_message = str(exc)
-            if token and not emitted and is_token_invalid_error(error_message):
-                refreshed_token = account_service.refresh_access_token(token, force=True, event="text_stream")
-                if refreshed_token and refreshed_token != token and refreshed_token not in attempted_tokens:
-                    token = refreshed_token
-                else:
-                    account_service.remove_invalid_token(token, "text_stream")
-                    token = account_service.get_text_access_token(attempted_tokens)
-                if token:
-                    continue
-            raise
+            try:
+                for event in conversation_events(active_backend, messages=request.messages, model=request.model, prompt=request.prompt):
+                    if event.get("type") != "conversation.delta":
+                        continue
+                    delta = str(event.get("delta") or "")
+                    if delta:
+                        emitted = True
+                        yield delta
+                account_service.mark_text_used(token)
+                return
+            except Exception as exc:
+                error_message = str(exc)
+                if token and not emitted and is_token_invalid_error(error_message):
+                    refreshed_token = account_service.refresh_access_token(token, force=True, event="text_stream")
+                    if refreshed_token and refreshed_token != token and refreshed_token not in attempted_tokens:
+                        token = refreshed_token
+                    else:
+                        account_service.remove_invalid_token(token, "text_stream")
+                        token = account_service.get_text_access_token(attempted_tokens)
+                    if token:
+                        continue
+                raise
+            finally:
+                active_backend.close()
+    finally:
+        backend.close()
 
 
 def collect_text(backend: OpenAIBackendAPI, request: ConversationRequest) -> str:
@@ -1263,6 +1268,7 @@ def _generate_single_image(
             "account_found": bool(account),
             "index": index,
         })
+        backend = None
         try:
             backend = OpenAIBackendAPI(access_token=token)
             if request.progress_callback:
@@ -1436,6 +1442,9 @@ def _generate_single_image(
                     time.sleep(wait_secs)
                     continue
             raise ImageGenerationError(image_stream_error_message(last_error), account_email=account_email, conversation_id="") from exc
+        finally:
+            if backend is not None:
+                backend.close()
 
 
 def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[ImageOutput]:

@@ -34,6 +34,7 @@ export function ConfigCard() {
   const setAutoReloginAfterRefresh = useSettingsStore((state) => state.setAutoReloginAfterRefresh);
   const setLogLevel = useSettingsStore((state) => state.setLogLevel);
   const setProxy = useSettingsStore((state) => state.setProxy);
+  const setGlobalProxySource = useSettingsStore((state) => state.setGlobalProxySource);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
   const setGlobalSystemPrompt = useSettingsStore((state) => state.setGlobalSystemPrompt);
   const setSensitiveWordsText = useSettingsStore((state) => state.setSensitiveWordsText);
@@ -97,6 +98,18 @@ export function ConfigCard() {
           </div>
           <div className="space-y-2">
             <label className="text-sm text-stone-700">全局代理</label>
+            <Select
+              value={config?.global_proxy_source === "register_pool" ? "register_pool" : "custom"}
+              onValueChange={(value) => setGlobalProxySource(value === "register_pool" ? "register_pool" : "custom")}
+            >
+              <SelectTrigger className="h-10 rounded-xl border-stone-200 bg-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="custom">自定义代理</SelectItem>
+                <SelectItem value="register_pool">代理池优先</SelectItem>
+              </SelectContent>
+            </Select>
             <Input
               value={String(config?.proxy || "")}
               onChange={(event) => {

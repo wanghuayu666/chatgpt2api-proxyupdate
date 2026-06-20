@@ -35,6 +35,7 @@ class ProxyRuntimeConfigTests(unittest.TestCase):
             expected_public["clearance"]["has_cf_clearance"] = False
             public_config = store.get()
             self.assertEqual(public_config["proxy"], " http://legacy.example:8080 ")
+            self.assertEqual(public_config["global_proxy_source"], "custom")
             self.assertEqual(public_config["proxy_runtime"], expected_public)
             self.assertNotIn("auth-key", public_config)
 
@@ -186,6 +187,17 @@ class ProxyRuntimeConfigTests(unittest.TestCase):
             self.assertEqual(raw_saved["proxy_runtime"], expected)
             reloaded = ConfigStore(store.path)
             self.assertEqual(reloaded.get_proxy_runtime_settings(), expected)
+
+    def test_global_proxy_source_is_normalized_and_persisted(self) -> None:
+        tmp_dir, store = self._make_store()
+        with tmp_dir:
+            public_config = store.update({"global_proxy_source": "register_pool"})
+            self.assertEqual(public_config["global_proxy_source"], "register_pool")
+            self.assertEqual(json.loads(store.path.read_text(encoding="utf-8"))["global_proxy_source"], "register_pool")
+
+            public_config = store.update({"global_proxy_source": "bad"})
+            self.assertEqual(public_config["global_proxy_source"], "custom")
+            self.assertEqual(json.loads(store.path.read_text(encoding="utf-8"))["global_proxy_source"], "custom")
 
     def test_public_proxy_runtime_redacts_and_preserves_existing_clearance_values(self) -> None:
         existing = copy.deepcopy(DEFAULT_PROXY_RUNTIME)

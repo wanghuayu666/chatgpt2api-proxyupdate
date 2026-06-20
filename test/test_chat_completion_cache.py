@@ -6,6 +6,7 @@ import json
 import base64
 
 from services.config import config
+from services.protocol import conversation
 from services.protocol import openai_v1_chat_complete, openai_v1_response
 from services.protocol.chat_completion_cache import chat_completion_cache
 from services.protocol.conversation import iter_conversation_payloads, sanitize_output_text
@@ -466,6 +467,34 @@ class ChatCompletionCacheTests(unittest.TestCase):
         self.assertEqual(len(images), 3)
         self.assertEqual([image[1] for image in images], ["image/png", "image/png", "image/png"])
         self.assertTrue(all(image[0] == PNG_1X1 for image in images))
+
+    def test_stream_text_deltas_closes_backends(self) -> None:
+        class FakeBackend:
+            instances = []
+
+            def __init__(self, access_token: str = "") -> None:
+                self.access_token = access_token
+                self.closed = False
+                FakeBackend.instances.append(self)
+
+            def close(self) -> None:
+                self.closed = True
+
+        initial_backend = FakeBackend("token-1")
+        events = iter([{"type": "conversation.delta", "delta": "ok"}])
+        request = conversation.ConversationRequest(model="auto", messages=[])
+
+        with (
+            mock.patch("services.protocol.conversation.OpenAIBackendAPI", FakeBackend),
+            mock.patch("services.protocol.conversation.conversation_events", return_value=events),
+            mock.patch("services.protocol.conversation.account_service.mark_text_used") as mark_text_used,
+        ):
+            result = list(conversation.stream_text_deltas(initial_backend, request))
+
+        self.assertEqual(result, ["ok"])
+        self.assertTrue(FakeBackend.instances)
+        self.assertTrue(all(instance.closed for instance in FakeBackend.instances))
+        mark_text_used.assert_called_once_with("token-1")
 
 
 if __name__ == "__main__":

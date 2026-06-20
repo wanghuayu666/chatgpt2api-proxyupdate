@@ -161,10 +161,10 @@ class RegisterProxyPool:
             self._reset_selection_cycle_locked()
             return self.state()
 
-    def next_proxy(self) -> ProxyPoolSelection:
+    def next_proxy(self, *, allow_refresh: bool = True, allow_blocked_fallback: bool = True) -> ProxyPoolSelection:
         with self._lock:
             mode = self._mode
-        if mode == "url" and self._should_refresh():
+        if allow_refresh and mode == "url" and self._should_refresh():
             self.refresh_url(force=False)
 
         with self._lock:
@@ -187,7 +187,17 @@ class RegisterProxyPool:
                     last_fetch=self._last_fetch,
                     selection_reason="no_proxy",
                 )
-            proxy, proxy_index, used_cooling_proxy, selection_reason = self._next_available_proxy_locked()
+            selected = self._next_available_proxy_locked(allow_blocked_fallback=allow_blocked_fallback)
+            if selected is None:
+                return ProxyPoolSelection(
+                    proxy="",
+                    source=self._mode,
+                    count=len(self._proxies),
+                    last_error=self._last_error,
+                    last_fetch=self._last_fetch,
+                    selection_reason="no_available_proxy",
+                )
+            proxy, proxy_index, used_cooling_proxy, selection_reason = selected
             self._current_proxy = proxy
             return ProxyPoolSelection(
                 proxy=proxy,
@@ -333,7 +343,7 @@ class RegisterProxyPool:
             self._save_proxy_state_locked()
             return {"bucket": bucket, "cooldown_seconds": cooldown_seconds}
 
-    def _next_available_proxy_locked(self) -> tuple[str, int, bool, str]:
+    def _next_available_proxy_locked(self, *, allow_blocked_fallback: bool = True) -> tuple[str, int, bool, str] | None:
         now = time.time()
         count = len(self._proxies)
         start_index = self._index
@@ -361,6 +371,9 @@ class RegisterProxyPool:
             self._lease_proxy_locked(proxy, now)
             self._record_selection_metric_locked(reason)
             return proxy, index, False, reason
+
+        if not allow_blocked_fallback:
+            return None
 
         index, proxy = self._fallback_proxy_locked(start_index, now, avoid_new_proxy=history_exists and not new_proxy_allowed)
         proxy = self._proxies[index]

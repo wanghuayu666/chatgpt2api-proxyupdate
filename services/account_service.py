@@ -1328,13 +1328,13 @@ class AccountService:
 
         active_token = self.refresh_access_token(access_token, event=f"{event}:preflight") or access_token
         try:
-            from services.openai_backend_api import InvalidAccessTokenError, OpenAIBackendAPI
-            result = OpenAIBackendAPI(active_token).get_user_info()
+            from services.openai_backend_api import InvalidAccessTokenError
+            result = self._fetch_backend_user_info(active_token)
         except InvalidAccessTokenError as exc:
             refreshed_token = self.refresh_access_token(active_token, force=True, event=f"{event}:invalid_access_token")
             if refreshed_token and refreshed_token != active_token:
                 try:
-                    result = OpenAIBackendAPI(refreshed_token).get_user_info()
+                    result = self._fetch_backend_user_info(refreshed_token)
                 except InvalidAccessTokenError as retry_exc:
                     if self._record_invalid_token_seen(
                         refreshed_token,
@@ -1356,6 +1356,16 @@ class AccountService:
                 raise
         self._record_refresh_success(active_token)
         return self.update_account(active_token, result)
+
+    @staticmethod
+    def _fetch_backend_user_info(access_token: str) -> dict[str, Any]:
+        from services.openai_backend_api import OpenAIBackendAPI
+
+        backend = OpenAIBackendAPI(access_token)
+        try:
+            return backend.get_user_info()
+        finally:
+            backend.close()
 
     # ---- 刷新进度追踪 ----
 

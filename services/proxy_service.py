@@ -7,7 +7,7 @@ import json
 import re
 import threading
 import time
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping
 from urllib import request as urllib_request
 from urllib.parse import quote, urlparse
 
@@ -166,6 +166,8 @@ class ProxySettingsStore:
         self._clearance_cache: dict[tuple[str, str], ClearanceBundle] = {}
         self._provider_cache: dict[str, FlareSolverrClearanceProvider] = {}
         self._flight_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._register_pool_refreshing = False
+        self._register_pool_last_refresh_attempt = 0.0
         self._lock = threading.RLock()
 
     def get_profile(
@@ -202,9 +204,11 @@ class ProxySettingsStore:
         elif explicit_proxy:
             selected_proxy = explicit_proxy
             source = "explicit"
-        elif legacy_proxy:
-            selected_proxy = legacy_proxy
-            source = "global"
+        else:
+            global_proxy, global_proxy_source = self._global_proxy_candidate(legacy_proxy)
+            if global_proxy:
+                selected_proxy = global_proxy
+                source = global_proxy_source
 
         return ProxyRuntimeProfile(
             proxy_url=normalize_proxy_url(selected_proxy),
@@ -358,6 +362,58 @@ class ProxySettingsStore:
         except AttributeError:
             runtime = {}
         return runtime if isinstance(runtime, dict) else {}
+
+    def _get_global_proxy_source(self) -> str:
+        try:
+            source = str(self._config.get_global_proxy_source() or "custom").strip().lower()
+        except AttributeError:
+            source = "custom"
+        return source if source in {"custom", "register_pool"} else "custom"
+
+    def _global_proxy_candidate(self, fallback_proxy: str) -> tuple[str, str]:
+        if self._get_global_proxy_source() != "register_pool":
+            return fallback_proxy, "global"
+        pool_proxy = self._register_pool_proxy()
+        if pool_proxy:
+            return pool_proxy, "global_register_pool"
+        return fallback_proxy, "global"
+
+    def _register_pool_proxy(self) -> str:
+        try:
+            from services.register import openai_register
+
+            state = openai_register.configure_proxy_pool(fetch_now=False)
+            self._schedule_register_pool_refresh_if_due(openai_register, state)
+            selection = openai_register.proxy_pool.next_proxy(allow_refresh=False, allow_blocked_fallback=False)
+            return normalize_proxy_url(selection.proxy)
+        except Exception:
+            return ""
+
+    def _schedule_register_pool_refresh_if_due(self, openai_register_module: Any, state: Any) -> None:
+        if str(getattr(state, "mode", "") or "") != "url":
+            return
+        try:
+            interval = max(10, int(openai_register_module.config.get("proxy_refresh_interval") or 120))
+        except (OverflowError, TypeError, ValueError):
+            interval = 120
+        now = time.time()
+        last_fetch = float(getattr(state, "last_fetch", 0.0) or 0.0)
+        if last_fetch and now - last_fetch < interval:
+            return
+        with self._lock:
+            if self._register_pool_refreshing or now - self._register_pool_last_refresh_attempt < 10:
+                return
+            self._register_pool_refreshing = True
+            self._register_pool_last_refresh_attempt = now
+
+        def refresh() -> None:
+            try:
+                openai_register_module.configure_proxy_pool(fetch_now=True)
+            finally:
+                with self._lock:
+                    self._register_pool_refreshing = False
+
+        threading.Thread(target=refresh, daemon=True, name="global-register-proxy-refresh").start()
 
     def _bundle_for_headers(self, profile: ProxyRuntimeProfile, target_host: str) -> ClearanceBundle | None:
         key = self._cache_key(profile.proxy_url, target_host)

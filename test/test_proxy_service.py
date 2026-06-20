@@ -17,12 +17,16 @@ from services.proxy_service import (
 
 
 class FakeConfig:
-    def __init__(self, legacy_proxy: str = "", runtime: dict[str, object] | None = None) -> None:
+    def __init__(self, legacy_proxy: str = "", runtime: dict[str, object] | None = None, global_proxy_source: str = "custom") -> None:
         self.legacy_proxy = legacy_proxy
         self.runtime = runtime if runtime is not None else copy.deepcopy(DEFAULT_PROXY_RUNTIME)
+        self.global_proxy_source = global_proxy_source
 
     def get_proxy_settings(self) -> str:
         return self.legacy_proxy
+
+    def get_global_proxy_source(self) -> str:
+        return self.global_proxy_source
 
     def get_proxy_runtime_settings(self) -> dict[str, object]:
         return copy.deepcopy(self.runtime)
@@ -89,6 +93,34 @@ class ProxyServiceTests(unittest.TestCase):
         kwargs = store.build_session_kwargs(proxy=" socks5://explicit.example:1080 ")
 
         self.assertEqual(kwargs["proxy"], "socks5h://explicit.example:1080")
+
+    def test_register_pool_can_supply_global_proxy(self) -> None:
+        store = ProxySettingsStore(FakeConfig(legacy_proxy="http://legacy.example:8080", global_proxy_source="register_pool"))
+
+        with patch.object(store, "_register_pool_proxy", return_value=" socks5://pool.example:1080 "):
+            profile = store.get_profile()
+
+        self.assertEqual(profile.proxy_url, "socks5h://pool.example:1080")
+        self.assertEqual(profile.proxy_source, "global_register_pool")
+
+    def test_register_pool_global_proxy_falls_back_to_custom_proxy(self) -> None:
+        store = ProxySettingsStore(FakeConfig(legacy_proxy="http://legacy.example:8080", global_proxy_source="register_pool"))
+
+        with patch.object(store, "_register_pool_proxy", return_value=""):
+            profile = store.get_profile()
+
+        self.assertEqual(profile.proxy_url, "http://legacy.example:8080")
+        self.assertEqual(profile.proxy_source, "global")
+
+    def test_higher_priority_proxy_does_not_consult_register_pool_global_proxy(self) -> None:
+        store = ProxySettingsStore(FakeConfig(legacy_proxy="http://legacy.example:8080", global_proxy_source="register_pool"))
+
+        with patch.object(store, "_register_pool_proxy") as register_pool_proxy:
+            profile = store.get_profile(proxy="http://explicit.example:8080")
+
+        self.assertEqual(profile.proxy_url, "http://explicit.example:8080")
+        self.assertEqual(profile.proxy_source, "explicit")
+        register_pool_proxy.assert_not_called()
 
     def test_resource_requests_use_resource_proxy_url_when_configured(self) -> None:
         runtime = make_runtime(

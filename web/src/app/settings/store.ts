@@ -30,6 +30,7 @@ import {
   type BackupState,
   type CPAPool,
   type CPARemoteFile,
+  type GlobalProxySource,
   type ImageStorageMode,
   type ImageStorageSettings,
   type ProxyRuntimeClearanceMode,
@@ -188,6 +189,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     auto_relogin_after_refresh: Boolean(config.auto_relogin_after_refresh),
     log_levels: Array.isArray(config.log_levels) ? config.log_levels : [],
     proxy: typeof config.proxy === "string" ? config.proxy : "",
+    global_proxy_source: config.global_proxy_source === "register_pool" ? "register_pool" : "custom",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
     global_system_prompt: String(config.global_system_prompt || ""),
     sensitive_words: Array.isArray(config.sensitive_words) ? config.sensitive_words : [],
@@ -329,6 +331,7 @@ type SettingsStore = {
   setAutoReloginAfterRefresh: (value: boolean) => void;
   setLogLevel: (level: string, enabled: boolean) => void;
   setProxy: (value: string) => void;
+  setGlobalProxySource: (value: GlobalProxySource) => void;
   setBaseUrl: (value: string) => void;
   setGlobalSystemPrompt: (value: string) => void;
   setSensitiveWordsText: (value: string) => void;
@@ -480,6 +483,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
         auto_relogin_after_refresh: Boolean(config.auto_relogin_after_refresh),
         proxy: config.proxy.trim(),
+        global_proxy_source: config.global_proxy_source === "register_pool" ? "register_pool" : "custom",
         base_url: String(config.base_url || "").trim(),
         global_system_prompt: String(config.global_system_prompt || "").trim(),
         sensitive_words: (config.sensitive_words || []).map((item) => String(item).trim()).filter(Boolean),
@@ -624,6 +628,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           proxy: value,
+        },
+      };
+    });
+  },
+
+  setGlobalProxySource: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          global_proxy_source: value === "register_pool" ? "register_pool" : "custom",
         },
       };
     });
