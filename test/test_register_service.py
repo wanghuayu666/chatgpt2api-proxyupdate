@@ -26,6 +26,13 @@ class RegisterServiceTests(unittest.TestCase):
             config_module.DATA_DIR = old_data_dir
         return register_module, service
 
+    class _Runner:
+        def __init__(self, alive: bool) -> None:
+            self.alive = alive
+
+        def is_alive(self) -> bool:
+            return self.alive
+
     def test_get_samples_current_account_pool_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             register_module, service = self._new_isolated_service(tmp_dir)
@@ -115,6 +122,53 @@ class RegisterServiceTests(unittest.TestCase):
             self.assertEqual(interval, 7)
             spawn_runner.assert_called_once_with()
             self.assertTrue(any("检测到注册守护线程已停止，自动重启" in item["text"] for item in service._logs))
+
+    def test_watchdog_requests_auto_restart_when_fd_threshold_is_exceeded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            register_module, service = self._new_isolated_service(tmp_dir)
+            service._config["enabled"] = True
+            service._config["check_interval"] = 7
+            service._runner = self._Runner(True)
+
+            with patch.object(service, "_fd_count", return_value=801, create=True), patch.object(
+                register_module.time,
+                "monotonic",
+                return_value=1000.0,
+            ), patch.object(service, "_spawn_runner_locked") as spawn_runner:
+                interval = service._watchdog_tick()
+
+            self.assertEqual(interval, 7)
+            self.assertFalse(service._config["enabled"])
+            self.assertTrue(service._fd_restart_pending)
+            self.assertEqual(service._config["stats"]["fd_count"], 801)
+            spawn_runner.assert_not_called()
+            self.assertTrue(any("fd=801" in item["text"] and "自动停止" in item["text"] for item in service._logs))
+
+    def test_watchdog_starts_registration_after_fd_restart_stop_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, service = self._new_isolated_service(tmp_dir)
+            service._config["enabled"] = False
+            service._config["check_interval"] = 7
+            service._fd_restart_pending = True
+            service._runner = self._Runner(False)
+
+            with patch.object(service, "start", return_value={"ok": True}) as start:
+                interval = service._watchdog_tick()
+
+            self.assertEqual(interval, 7)
+            self.assertFalse(service._fd_restart_pending)
+            start.assert_called_once_with()
+
+    def test_manual_stop_cancels_pending_fd_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, service = self._new_isolated_service(tmp_dir)
+            service._config["enabled"] = True
+            service._fd_restart_pending = True
+
+            service.stop()
+
+            self.assertFalse(service._config["enabled"])
+            self.assertFalse(service._fd_restart_pending)
 
     def test_runner_exception_keeps_enabled_for_next_retry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

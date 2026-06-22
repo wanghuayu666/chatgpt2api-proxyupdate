@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import json
+import os
 import threading
 import time
 import uuid
@@ -14,6 +16,8 @@ from services.register import mail_provider, openai_register
 
 
 REGISTER_FILE = DATA_DIR / "register.json"
+REGISTER_FD_RESTART_THRESHOLD = 800
+REGISTER_FD_RESTART_COOLDOWN_SECONDS = 300
 REGISTER_RUNTIME_KEYS = (
     "mail",
     "proxy",
@@ -112,6 +116,8 @@ class RegisterService:
         self._lock = threading.RLock()
         self._runner: threading.Thread | None = None
         self._watchdog: threading.Thread | None = None
+        self._fd_restart_pending = False
+        self._fd_restart_last_at = 0.0
         self._logs: list[dict] = []
         openai_register.register_log_sink = self._append_log
         self._config = self._load()
@@ -238,11 +244,16 @@ class RegisterService:
 
     def start(self) -> dict:
         with self._lock:
+            if self._fd_restart_pending and self._runner and self._runner.is_alive():
+                self._spawn_watchdog_locked()
+                self._save()
+                return self.get()
             if self._runner and self._runner.is_alive():
                 self._config["enabled"] = True
                 self._spawn_watchdog_locked()
                 self._save()
                 return self.get()
+            self._fd_restart_pending = False
             self._config["enabled"] = True
             self._drop_mail_proxy()
             self._logs = []
@@ -268,8 +279,9 @@ class RegisterService:
 
     def stop(self) -> dict:
         with self._lock:
+            self._fd_restart_pending = False
             self._config["enabled"] = False
-            self._config["stats"]["updated_at"] = _now()
+            self._config["stats"].update({"fd_restart_pending": False, "updated_at": _now()})
             self._save()
             self._append_log("已请求停止注册任务，正在等待当前运行任务结束", "yellow")
             return self.get()
@@ -344,10 +356,65 @@ class RegisterService:
         self._append_log("检测到注册守护线程已停止，自动重启", "red")
         self._spawn_runner_locked()
 
+    def _fd_count(self) -> int:
+        try:
+            return len(os.listdir("/proc/self/fd"))
+        except Exception:
+            return 0
+
+    def _request_fd_restart_locked(self) -> bool:
+        if self._fd_restart_pending or not self._config.get("enabled"):
+            return False
+        if not self._runner or not self._runner.is_alive():
+            return False
+        fd_count = self._fd_count()
+        if fd_count < REGISTER_FD_RESTART_THRESHOLD:
+            return False
+        now = time.monotonic()
+        if self._fd_restart_last_at and now - self._fd_restart_last_at < REGISTER_FD_RESTART_COOLDOWN_SECONDS:
+            return False
+        self._fd_restart_pending = True
+        self._fd_restart_last_at = now
+        self._config["enabled"] = False
+        self._config["stats"].update({
+            "fd_count": fd_count,
+            "fd_restart_threshold": REGISTER_FD_RESTART_THRESHOLD,
+            "fd_restart_pending": True,
+            "updated_at": _now(),
+        })
+        self._save()
+        self._append_log(
+            f"检测到注册进程 fd={fd_count} 超过阈值 {REGISTER_FD_RESTART_THRESHOLD}，自动停止并准备重启注册任务",
+            "red",
+        )
+        return True
+
+    def _complete_fd_restart_locked(self) -> int:
+        interval = max(1, int(self._config.get("check_interval") or 5))
+        if self._runner and self._runner.is_alive():
+            return interval
+        self._fd_restart_pending = False
+        self._config["stats"].update({"fd_restart_pending": False, "updated_at": _now()})
+        try:
+            gc.collect()
+            self.start()
+        except Exception as error:
+            self._config["enabled"] = False
+            self._config["stats"].update({"last_error": f"fd 自动重启失败: {error}", "updated_at": _now()})
+            self._save()
+            self._append_log(f"fd 自动重启失败: {error}", "red")
+            return 0
+        self._append_log("fd 超阈值自动重启注册任务完成", "yellow")
+        return interval
+
     def _watchdog_tick(self) -> int:
         with self._lock:
+            if self._fd_restart_pending:
+                return self._complete_fd_restart_locked()
             if not self._config.get("enabled"):
                 return 0
+            if self._request_fd_restart_locked():
+                return max(1, int(self._config.get("check_interval") or 5))
             self._ensure_runner_alive_locked()
             return max(1, int(self._config.get("check_interval") or 5))
 
