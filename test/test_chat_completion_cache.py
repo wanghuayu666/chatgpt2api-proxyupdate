@@ -6,6 +6,7 @@ import json
 import base64
 
 from services.config import config
+from services.openai_backend_api import OpenAIBackendAPI
 from services.protocol import conversation
 from services.protocol import openai_v1_chat_complete, openai_v1_response
 from services.protocol.chat_completion_cache import chat_completion_cache
@@ -158,6 +159,89 @@ class ChatCompletionCacheTests(unittest.TestCase):
         self.assertEqual(details["cached_tokens"], 0)
         output_details = response["usage"]["output_tokens_details"]
         self.assertEqual(output_details["reasoning_tokens"], 0)
+
+    def test_chat_completion_passes_mapped_reasoning_effort_to_text_request(self) -> None:
+        captured_effort = "unset"
+
+        def fake_collect_text(_backend, request):
+            nonlocal captured_effort
+            captured_effort = request.thinking_effort
+            return "ok"
+
+        with (
+            mock.patch("services.protocol.openai_v1_chat_complete.text_backend", return_value=object()),
+            mock.patch("services.protocol.openai_v1_chat_complete.collect_text", side_effect=fake_collect_text),
+        ):
+            openai_v1_chat_complete.handle({
+                "model": "auto",
+                "reasoning_effort": "xhigh",
+                "messages": [{"role": "user", "content": "effort"}],
+            })
+
+        self.assertEqual(captured_effort, "extended")
+
+    def test_chat_completion_prefers_thinking_effort_and_ignores_invalid_effort(self) -> None:
+        captured_efforts: list[str] = []
+
+        def fake_stream_text_deltas(_backend, request):
+            captured_efforts.append(request.thinking_effort)
+            yield "ok"
+
+        with (
+            mock.patch("services.protocol.openai_v1_chat_complete.text_backend", return_value=object()),
+            mock.patch("services.protocol.openai_v1_chat_complete.stream_text_deltas", side_effect=fake_stream_text_deltas),
+        ):
+            list(openai_v1_chat_complete.handle({
+                "model": "auto",
+                "stream": True,
+                "thinking_effort": "low",
+                "reasoning_effort": "high",
+                "messages": [{"role": "user", "content": "effort"}],
+            }))
+            list(openai_v1_chat_complete.handle({
+                "model": "auto",
+                "stream": True,
+                "reasoning_effort": "turbo",
+                "messages": [{"role": "user", "content": "effort invalid"}],
+            }))
+
+        self.assertEqual(captured_efforts, ["low", ""])
+
+    def test_responses_passes_reasoning_effort_to_text_request(self) -> None:
+        captured_effort = "unset"
+
+        def fake_stream_text_deltas(_backend, request):
+            nonlocal captured_effort
+            captured_effort = request.thinking_effort
+            yield "ok"
+
+        with (
+            mock.patch("services.protocol.openai_v1_response.text_backend", return_value=object()),
+            mock.patch("services.protocol.openai_v1_response.stream_text_deltas", side_effect=fake_stream_text_deltas),
+        ):
+            openai_v1_response.handle({
+                "model": "auto",
+                "input": "effort",
+                "reasoning": {"effort": "medium"},
+            })
+
+        self.assertEqual(captured_effort, "medium")
+
+    def test_backend_conversation_payload_includes_explicit_thinking_effort_only(self) -> None:
+        backend = object.__new__(OpenAIBackendAPI)
+        messages = [{"role": "user", "content": "hello"}]
+
+        without_effort = OpenAIBackendAPI._conversation_payload(backend, messages, "auto", "Asia/Shanghai")
+        with_effort = OpenAIBackendAPI._conversation_payload(
+            backend,
+            messages,
+            "auto",
+            "Asia/Shanghai",
+            thinking_effort="extended",
+        )
+
+        self.assertNotIn("thinking_effort", without_effort)
+        self.assertEqual(with_effort["thinking_effort"], "extended")
 
     def test_repeated_responses_text_request_uses_cache(self) -> None:
         calls = 0
@@ -482,16 +566,17 @@ class ChatCompletionCacheTests(unittest.TestCase):
 
         initial_backend = FakeBackend("token-1")
         events = iter([{"type": "conversation.delta", "delta": "ok"}])
-        request = conversation.ConversationRequest(model="auto", messages=[])
+        request = conversation.ConversationRequest(model="auto", messages=[], thinking_effort="high")
 
         with (
             mock.patch("services.protocol.conversation.OpenAIBackendAPI", FakeBackend),
-            mock.patch("services.protocol.conversation.conversation_events", return_value=events),
+            mock.patch("services.protocol.conversation.conversation_events", return_value=events) as conversation_events,
             mock.patch("services.protocol.conversation.account_service.mark_text_used") as mark_text_used,
         ):
             result = list(conversation.stream_text_deltas(initial_backend, request))
 
         self.assertEqual(result, ["ok"])
+        self.assertEqual(conversation_events.call_args.kwargs["thinking_effort"], "high")
         self.assertTrue(FakeBackend.instances)
         self.assertTrue(all(instance.closed for instance in FakeBackend.instances))
         mark_text_used.assert_called_once_with("token-1")

@@ -7,6 +7,7 @@ from typing import Any, Iterable, Iterator
 from fastapi import HTTPException
 
 from services.protocol.chat_completion_cache import cache_key, chat_completion_cache, normalize_text_messages
+from services.protocol.openai_v1_chat_complete import parse_thinking_effort
 from services.protocol.conversation import (
     ConversationRequest,
     ImageOutput,
@@ -274,7 +275,12 @@ def text_response_parts(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]
     return model, messages
 
 
-def stream_text_response(backend, body: dict[str, Any], messages: list[dict[str, Any]] | None = None) -> Iterator[dict[str, Any]]:
+def stream_text_response(
+    backend,
+    body: dict[str, Any],
+    messages: list[dict[str, Any]] | None = None,
+    thinking_effort: str = "",
+) -> Iterator[dict[str, Any]]:
     model = str(body.get("model") or "auto").strip() or "auto"
     messages = messages if messages is not None else messages_from_input(body.get("input"), body.get("instructions"))
     response_id = f"resp_{uuid.uuid4().hex}"
@@ -283,7 +289,7 @@ def stream_text_response(backend, body: dict[str, Any], messages: list[dict[str,
     full_text = ""
     yield response_created(response_id, model, created)
     yield {"type": "response.output_item.added", "output_index": 0, "item": text_output_item("", item_id, "in_progress")}
-    request = ConversationRequest(model=model, messages=messages)
+    request = ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)
     for delta in stream_text_deltas(backend, request):
         full_text += delta
         yield {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "delta": delta}
@@ -393,10 +399,11 @@ def response_events(body: dict[str, Any]) -> Iterator[dict[str, Any]]:
         if has_web_search_tool(body) and not has_unsupported_response_tools(body):
             yield from stream_web_search_response(body, messages)
             return
+        thinking_effort = parse_thinking_effort(body)
         key = cache_key(body, messages, stream=bool(body.get("stream")))
         yield from chat_completion_cache.get_or_compute_stream(
             key,
-            lambda: stream_text_response(text_backend(), body, messages),
+            lambda: stream_text_response(text_backend(), body, messages, thinking_effort),
         )
         return
 

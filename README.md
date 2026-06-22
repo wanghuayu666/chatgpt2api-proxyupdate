@@ -1,6 +1,6 @@
 <h1 align="center">ChatGPT2API Proxy Pool</h1>
 
-<p align="center">基于 <a href="https://github.com/basketikun/chatgpt2api">basketikun/chatgpt2api</a> v1.5.0 的二开分支，当前版本 v1.5.3。本次更新聚焦注册机 7x24 稳定运行、fd 超阈值自愈、账号刷新资源释放和全局代理来源增强。</p>
+<p align="center">基于 <a href="https://github.com/basketikun/chatgpt2api">basketikun/chatgpt2api</a> v1.5.0 的二开分支，当前版本 v1.5.3。本次更新聚焦注册机 7x24 稳定运行、fd 超阈值自愈、账号刷新资源释放、全局代理来源增强和普通文本思考强度透传。</p>
 
 
 ## 分支说明
@@ -25,6 +25,7 @@
 - 优化账号信息请求流程，`/backend-api/me` 失败时不再继续发起额外账号初始化请求，减少失效 token 带来的无效连接占用。
 - 将注册机代理黑名单清理改为按代理刷新间隔自动执行，复用原有手动清理逻辑，不改变黑名单评分和冷却规则。
 - 全局代理新增“代理池优先”来源：可优先使用注册机代理池中的可用代理，代理池不可用时自动回退自定义全局代理。
+- `/v1/chat/completions` 和 `/v1/responses` 普通文本链路支持透传 `reasoning_effort` / `thinking_effort` 到 ChatGPT Web 后端的 `thinking_effort`。
 
 > [!WARNING]
 > 免责声明：
@@ -69,6 +70,30 @@ v1.5.3 在设置页的“全局代理”中新增来源选择。
 - `自定义代理`：保持原行为，使用 `config.json` 中的 `proxy`。
 - `代理池优先`：优先从注册机代理池选择可用代理；代理池不可用、无缓存、全部冷却或正在刷新失败时，自动回退自定义全局代理。
 - 账号专属代理、FlareSolverr 稳定代理运行时、显式传入代理的优先级不变。
+
+### 普通文本思考强度透传
+
+v1.5.3 为 OpenAI 兼容文本接口增加思考强度透传，不改变图片生成、图生图、PPT/PSD 文件任务逻辑。
+
+- `/v1/chat/completions` 支持 `thinking_effort`、`reasoning_effort` 和 `reasoning.effort`。
+- `/v1/responses` 文本链路同步支持 `thinking_effort`、`reasoning_effort` 和 `reasoning.effort`。
+- 合法映射：`low`、`medium`、`high` 原样透传，`xhigh` 和 `extended` 透传为 `extended`。
+- `none`、空值和非法值会被忽略，不写入上游 payload，保持默认请求行为。
+
+示例：
+
+```bash
+curl http://localhost:13000/v1/chat/completions \
+  -H "Authorization: Bearer 你的key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "auto",
+    "reasoning_effort": "xhigh",
+    "messages": [
+      {"role":"user","content":"Juice测试提示词"}
+    ]
+  }'
+```
 
 ## 快速开始
 
