@@ -61,6 +61,7 @@ SEARCH_POLL_INTERVAL_SECS = 3.0
 SEARCH_DONE_STATUS = {"finished_successfully", "finished_partial_completion"}
 SEARCH_CONVERSATION_ID_RE = re.compile(r'"conversation_id"\s*:\s*"([^"]+)"')
 SEARCH_URL_RE = re.compile(r"https?://[^\s\"'<>）)\]}]+")
+CONVERSATION_THINKING_EFFORTS = {"low", "medium", "high", "extended"}
 EDITABLE_FILE_MODEL = "gpt-5-5-thinking"
 EDITABLE_FILE_THINKING_EFFORT = "extended"
 EDITABLE_FILE_TIMEOUT_SECS = 1200.0
@@ -509,7 +510,7 @@ class OpenAIBackendAPI:
                 "screen_width": 2560,
             },
         }
-        if thinking_effort:
+        if thinking_effort in CONVERSATION_THINKING_EFFORTS:
             payload["thinking_effort"] = thinking_effort
         return payload
 
